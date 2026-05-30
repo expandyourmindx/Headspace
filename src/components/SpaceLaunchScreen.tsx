@@ -1,5 +1,5 @@
-import React, { useRef, useCallback } from 'react';
-import { User, LogOut, Pin, Plus, ArrowRight, Folder, Trash2 } from 'lucide-react';
+import React, { useRef, useCallback, useState } from 'react';
+import { User, LogOut, Pin, Plus, ArrowRight, Folder, Trash2, Pencil, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Space, Page, Task } from '../db';
 
@@ -13,6 +13,7 @@ interface SpaceLaunchScreenProps {
   onSignOut: () => void;
   onCreateSpaceClick: () => void;
   onDeleteSpace: (spaceId: number, name: string) => void;
+  onRenameSpace: (spaceId: number, newName: string) => void;
 }
 
 interface LauncherSpaceCardProps {
@@ -22,6 +23,7 @@ interface LauncherSpaceCardProps {
   onSelectSpace: (spaceId: number) => void;
   onTogglePin: (spaceId: number) => void;
   onDeleteSpace: (spaceId: number, name: string) => void;
+  onRenameSpaceClick: (space: Space) => void;
   showDelete: boolean;
 }
 
@@ -32,6 +34,7 @@ const LauncherSpaceCard: React.FC<LauncherSpaceCardProps> = ({
   onSelectSpace,
   onTogglePin,
   onDeleteSpace,
+  onRenameSpaceClick,
   showDelete,
 }) => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -74,7 +77,7 @@ const LauncherSpaceCard: React.FC<LauncherSpaceCardProps> = ({
       onMouseLeave={stop}
       onTouchMove={stop}
       onClick={onClick}
-      className="bg-white hover:bg-zinc-50/50 border border-zinc-200 rounded-2xl p-5 relative cursor-pointer shadow-xs hover:shadow-md hover:border-zinc-350 group flex flex-col justify-between min-h-[145px] transition-all select-none"
+      className="bg-surface hover:bg-background/80 border border-border rounded-2xl p-5 relative cursor-pointer shadow-xs hover:shadow-md group flex flex-col justify-between min-h-[145px] transition-colors select-none"
       id={`space-card-${space.id}`}
     >
       {/* Top bar */}
@@ -86,9 +89,24 @@ const LauncherSpaceCard: React.FC<LauncherSpaceCardProps> = ({
           />
           <div className="flex flex-col min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
-              <span className="font-extrabold text-zinc-900 text-sm leading-snug truncate max-w-[140px] sm:max-w-[160px]">
+              <span className="font-extrabold text-text-primary text-sm leading-snug truncate max-w-[120px] sm:max-w-[140px]">
                 {space.name}
               </span>
+              <button
+                type="button"
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onRenameSpaceClick(space);
+                }}
+                className="p-1 rounded-full text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer shrink-0"
+                title="Rename Space"
+                id={`rename-space-btn-${space.id}`}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
               {showDelete && (
                 <button
                   type="button"
@@ -123,7 +141,7 @@ const LauncherSpaceCard: React.FC<LauncherSpaceCardProps> = ({
           className={`p-1 px-1.5 rounded-lg cursor-pointer flex items-center justify-center transition-colors shadow-2xs ${
             space.pinned 
               ? 'text-indigo-500 hover:text-indigo-650 bg-indigo-50 border border-indigo-100' 
-              : 'text-zinc-300 hover:text-indigo-500 bg-zinc-50 hover:bg-indigo-50 border border-zinc-200/50 hover:border-indigo-100'
+              : 'text-text-secondary hover:text-indigo-500 bg-background hover:bg-background/80 border border-border'
           }`}
           title={space.pinned ? "Unpin this space" : "Pin this space to top"}
           id={`pin-btn-${space.id}`}
@@ -135,13 +153,13 @@ const LauncherSpaceCard: React.FC<LauncherSpaceCardProps> = ({
       {/* Stat Counters & Visual Aid */}
       <div className="mt-4 flex items-center justify-between" id={`stat-panel-${space.id}`}>
         <div className="flex items-center gap-2">
-          <div className="bg-zinc-50 border border-zinc-100 rounded-xl px-2.5 py-1 text-center min-w-[56px]">
+          <div className="bg-background border border-border rounded-xl px-2.5 py-1 text-center min-w-[56px]">
             <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider leading-none">Cards</div>
-            <div className="text-xs font-black text-zinc-800 mt-0.5">{cardCount}</div>
+            <div className="text-xs font-black text-text-primary mt-0.5">{cardCount}</div>
           </div>
-          <div className="bg-zinc-50 border border-zinc-100 rounded-xl px-2.5 py-1 text-center min-w-[56px]">
+          <div className="bg-background border border-border rounded-xl px-2.5 py-1 text-center min-w-[56px]">
             <div className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider leading-none">Stages</div>
-            <div className="text-xs font-black text-zinc-800 mt-0.5">{stageCount}</div>
+            <div className="text-xs font-black text-text-primary mt-0.5">{stageCount}</div>
           </div>
         </div>
 
@@ -163,7 +181,16 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
   onSignOut,
   onCreateSpaceClick,
   onDeleteSpace,
+  onRenameSpace,
 }) => {
+  const [renamingSpace, setRenamingSpace] = useState<Space | null>(null);
+  const [renameInput, setRenameInput] = useState<string>('');
+
+  const handleStartRename = (space: Space) => {
+    setRenamingSpace(space);
+    setRenameInput(space.name);
+  };
+
   // Sort helper: sorted by name alphabetically
   const sortByName = (a: Space, b: Space) => a.name.localeCompare(b.name);
 
@@ -184,9 +211,9 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen w-full bg-zinc-50/50 flex flex-col font-sans select-none overflow-y-auto" id="launch-screen-container">
+    <div className="min-h-screen w-full bg-background flex flex-col font-sans select-none overflow-y-auto" id="launch-screen-container">
       {/* 1. Header Navigation Bar */}
-      <header className="shrink-0 bg-white border-b border-zinc-200/85 z-30" id="launch-header">
+      <header className="shrink-0 bg-surface border-b border-border z-30" id="launch-header">
         <div className="max-w-4xl mx-auto h-16 px-4 md:px-6 flex items-center justify-between">
           <div className="flex items-center gap-3" id="launch-user-info">
             <div className="w-9 h-9 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
@@ -194,7 +221,7 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
             </div>
             <div className="flex flex-col">
               <span className="text-xs text-zinc-400 font-bold uppercase tracking-wider leading-none mb-1">Signed in as</span>
-              <span className="text-sm font-bold text-zinc-800 truncate max-w-[200px] md:max-w-[300px]">
+              <span className="text-sm font-bold text-text-primary truncate max-w-[200px] md:max-w-[300px]">
                 {currentUser?.displayName || currentUser?.email || 'Workspace User'}
               </span>
             </div>
@@ -202,7 +229,7 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
 
           <button
             onClick={onSignOut}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-zinc-500 hover:text-red-650 hover:bg-red-50 border border-zinc-200 hover:border-red-100 rounded-xl transition-all h-9 cursor-pointer shadow-2xs"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-text-secondary hover:text-rose-500 hover:bg-rose-50/10 border border-border rounded-xl transition-all h-9 cursor-pointer shadow-2xs"
             title="Sign Out of Workspace"
             id="launch-signout-btn"
           >
@@ -217,7 +244,7 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
         <div className="space-y-8">
           {/* Dashboard Intro */}
           <div className="select-none text-center sm:text-left">
-            <h1 className="text-3xl font-black tracking-tight text-zinc-900 mb-2">
+            <h1 className="text-3xl font-black tracking-tight text-text-primary mb-2">
               Select Workspace Space
             </h1>
             <p className="text-sm text-zinc-500 font-medium">
@@ -226,11 +253,11 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
           </div>
 
           {spaces.length === 0 ? (
-            <div className="text-center py-16 bg-white rounded-3xl border border-zinc-200/80 p-8 flex flex-col items-center shadow-xs" id="launch-empty-state">
+            <div className="text-center py-16 bg-surface rounded-3xl border border-border p-8 flex flex-col items-center shadow-xs" id="launch-empty-state">
               <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 mb-4 border border-indigo-100 animate-bounce">
                 <Folder className="w-8 h-8 stroke-[1.5]" />
               </div>
-              <h3 className="font-extrabold text-zinc-900 text-lg mb-2">No Spaces Created Yet</h3>
+              <h3 className="font-extrabold text-text-primary text-lg mb-2">No Spaces Created Yet</h3>
               <p className="text-sm text-zinc-500 max-w-md mx-auto leading-relaxed mb-6">
                 Organize your tasks, notes, and progress stages. Create a designated Space to build custom workspace tracking boards.
               </p>
@@ -264,6 +291,7 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
                         onSelectSpace={onSelectSpace}
                         onTogglePin={onTogglePin}
                         onDeleteSpace={onDeleteSpace}
+                        onRenameSpaceClick={handleStartRename}
                         showDelete={spaces.length > 1}
                       />
                     ))}
@@ -289,6 +317,7 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
                       onSelectSpace={onSelectSpace}
                       onTogglePin={onTogglePin}
                       onDeleteSpace={onDeleteSpace}
+                      onRenameSpaceClick={handleStartRename}
                       showDelete={spaces.length > 1}
                     />
                   ))}
@@ -312,6 +341,68 @@ export const SpaceLaunchScreen: React.FC<SpaceLaunchScreenProps> = ({
           </div>
         )}
       </main>
+
+      {/* OVERLAY SHEET: RENAME SPACE FORM */}
+      {renamingSpace && (
+        <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-end justify-center z-50 p-0 animate-fade-in" id="rename-space-backdrop">
+          <div className="w-full bg-surface rounded-t-3xl border-t border-border shadow-2xl flex flex-col max-h-[80vh]" id="rename-space-sheet" style={{ paddingBottom: 'env(keyboard-inset-height, 0px)' }}>
+            
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface" id="rename-space-header">
+              <h3 className="font-extrabold text-sm text-text-primary">Rename Space</h3>
+              <button 
+                onClick={() => setRenamingSpace(null)}
+                className="p-2 text-zinc-400 hover:text-zinc-650 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (renameInput.trim()) {
+                  onRenameSpace(renamingSpace.id!, renameInput.trim());
+                  setRenamingSpace(null);
+                }
+              }}
+              className="p-6 space-y-5 bg-surface"
+              id="rename-space-form"
+            >
+              <div className="flex gap-3 pb-4 border-b border-border" id="sheet-rename-space-actions">
+                <button
+                  type="button"
+                  onClick={() => setRenamingSpace(null)}
+                  className="flex-1 bg-background hover:bg-background/80 text-text-primary font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
+                  id="btn-sheet-rename-space-cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-3 rounded-xl shadow-md active-bounce cursor-pointer min-h-[44px]"
+                  id="btn-sheet-rename-space-submit"
+                >
+                  Confirm Rename
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Space Name</label>
+                <input 
+                  type="text"
+                  ref={(input) => input && input.focus()}
+                  placeholder="e.g., Household Errands, Client Work..."
+                  value={renameInput}
+                  onChange={(e) => setRenameInput(e.target.value)}
+                  className="w-full h-11 px-3.5 rounded-xl bg-surface border border-border focus:outline-hidden focus:border-indigo-500 focus:bg-surface text-sm text-text-primary"
+                  id="input-sheet-rename-space-name"
+                />
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 };

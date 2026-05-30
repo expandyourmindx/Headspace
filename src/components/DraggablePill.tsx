@@ -15,6 +15,7 @@ interface DraggablePillProps {
   renderPageIcon: (iconName: string, className?: string) => React.ReactNode;
   onDragStateChange?: (isDragging: boolean) => void;
   onDelete?: (pageId: number) => void;
+  onLongPress?: (pageId: number, pageName: string) => void;
 }
 
 const DraggablePill = forwardRef<HTMLButtonElement, DraggablePillProps>(({
@@ -27,22 +28,43 @@ const DraggablePill = forwardRef<HTMLButtonElement, DraggablePillProps>(({
   onReorder,
   renderPageIcon,
   onDragStateChange,
-  onDelete
+  onDelete,
+  onLongPress
 }, ref) => {
   const dragX = useMotionValue(0);
   const springX = useSpring(dragX, { damping: 15, stiffness: 200, mass: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const hoverTimer = useRef<any>(null);
   const hoverTargetIndex = useRef<number | null>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const startLongPressTimer = () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      onLongPress?.(page.id!, page.name);
+    }, 500);
+  };
+
+  const cancelLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
 
   React.useEffect(() => {
     return () => {
       if (hoverTimer.current) clearTimeout(hoverTimer.current);
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     };
   }, []);
 
   const bind = useDrag(({ active, movement: [mx], tap, cancel }) => {
+    if (active) {
+      cancelLongPressTimer();
+    }
     if (tap) {
+      cancelLongPressTimer();
       onClick();
       return;
     }
@@ -94,10 +116,63 @@ const DraggablePill = forwardRef<HTMLButtonElement, DraggablePillProps>(({
     delay: 200 // 200ms Stationary Lift Threshold Beat
   });
 
+  const gestureProps = bind() as any;
+  const customEvents: any = {
+    onPointerDown: (e: any) => {
+      startLongPressTimer();
+    },
+    onPointerMove: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onPointerUp: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onPointerCancel: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onPointerLeave: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onMouseDown: (e: any) => {
+      startLongPressTimer();
+    },
+    onMouseUp: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onMouseLeave: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onTouchStart: (e: any) => {
+      startLongPressTimer();
+    },
+    onTouchMove: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onTouchEnd: (e: any) => {
+      cancelLongPressTimer();
+    },
+    onTouchCancel: (e: any) => {
+      cancelLongPressTimer();
+    }
+  };
+
+  // Merge the event handlers safely so no @use-gesture handlers are overridden
+  const mergedProps = { ...gestureProps };
+  for (const key of Object.keys(customEvents)) {
+    if (gestureProps[key]) {
+      mergedProps[key] = (e: any) => {
+        customEvents[key](e);
+        gestureProps[key](e);
+      };
+    } else {
+      mergedProps[key] = customEvents[key];
+    }
+  }
+
   return (
     <motion.button
       ref={ref as any}
-      {...(bind() as any)}
+      {...mergedProps}
       layout
       style={{
         x: springX,

@@ -43,7 +43,7 @@ import {
 import { useAuth } from './contexts/AuthContext';
 import { AuthScreen } from './components/AuthScreen';
 import { SpaceLaunchScreen } from './components/SpaceLaunchScreen';
-import { coldPullFromFirestore, createSyncEngine, deleteFromFirestore } from './sync/firestoreSync';
+import { coldPullFromFirestore, createSyncEngine, deleteFromFirestore, deleteSpaceCascadingFromFirestore } from './sync/firestoreSync';
 import { useTheme } from './contexts/ThemeContext';
 import { ThemeId, THEME_LIST, PALETTES } from './themes/palettes';
 
@@ -54,7 +54,7 @@ export default function App() {
 
   // Active state of launch screen home dashboard
   const [launchScreenActive, setLaunchScreenActive] = useState<boolean>(false);
-  const [syncLoading, setSyncLoading] = useState<boolean>(false);
+  const [syncLoading, setSyncLoading] = useState<boolean>(true);
   const [hasPulled, setHasPulled] = useState<boolean>(false);
 
   const syncEngineRef = useRef<(() => void) | null>(null);
@@ -91,6 +91,13 @@ export default function App() {
     }
   }, [currentUser?.uid, hasPulled]);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setHasPulled(false);
+      setSyncLoading(true);
+    }
+  }, [currentUser]);
+
   // Active tab state removed for clean shell structure
 
   
@@ -111,6 +118,14 @@ export default function App() {
   // Deleting page state for move-or-delete-all flow
   const [deletingPageId, setDeletingPageId] = useState<number | null>(null);
   const [moveToPageId, setMoveToPageId] = useState<number | null>(null);
+
+  // Renaming page state
+  const [renamingPageId, setRenamingPageId] = useState<number | null>(null);
+  const [renamePageInput, setRenamePageInput] = useState<string>('');
+
+  // Deleting space state for state-driven confirmation
+  const [pendingDeleteSpaceId, setPendingDeleteSpaceId] = useState<number | null>(null);
+  const [pendingDeleteSpaceName, setPendingDeleteSpaceName] = useState<string>('');
 
   // Form states
   const [newSpaceName, setNewSpaceName] = useState('');
@@ -161,16 +176,19 @@ export default function App() {
     return db.pages.where('spaceId').equals(currentSpace.id!).sortBy('order');
   }, [currentSpace]) || [];
 
-  // Run the seeding logic once
+  // Run the seeding logic once on first ever load when no spaces exist
   useEffect(() => {
     const initDb = async () => {
-      const result = await seedDatabase();
-      if (!selectedSpaceId && result.spaceId) {
-        setSelectedSpaceId(result.spaceId);
+      const spaceCount = await db.spaces.count();
+      if (spaceCount === 0) {
+        const result = await seedDatabase();
+        if (!selectedSpaceId && result.spaceId) {
+          setSelectedSpaceId(result.spaceId);
+        }
       }
     };
     initDb();
-  }, [selectedSpaceId]);
+  }, []);
 
   // Set default selected space & page
   useEffect(() => {
@@ -308,6 +326,15 @@ export default function App() {
 
   if (!currentUser) {
     return <AuthScreen />;
+  }
+
+  if (syncLoading) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-zinc-50 font-sans animate-fade-in" id="app-sync-loading-screen">
+        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
+        <p className="text-sm font-semibold text-zinc-500">Synchronizing cloud documents...</p>
+      </div>
+    );
   }
 
   // Directly move a task card from one board stage/page to another
@@ -543,38 +570,39 @@ export default function App() {
   const handleConfirmDeletePage = async (deleteCards: boolean) => {
     if (!deletingPageId) return;
 
-    // 1. Get cards in the lane being deleted
-    const cardsInLane = tasks.filter(t => t.spaceId === currentSpace?.id && t.pageId === deletingPageId);
-
+    // 1. Delete all entries where pageId === deletingPageId from db.entries
     if (deleteCards) {
-      // Option B: Delete cards permanently
-      for (const card of cardsInLane) {
-        if (card.id) {
-          await db.entries.delete(card.id);
-          if (currentUser?.uid) {
+      const cardsInLane = await db.entries.where('pageId').equals(deletingPageId).toArray();
+      await db.entries.where('pageId').equals(deletingPageId).delete();
+      if (currentUser?.uid) {
+        for (const card of cardsInLane) {
+          if (card.id) {
             await deleteFromFirestore(currentUser.uid, 'entries', card.id);
           }
         }
       }
     } else if (moveToPageId) {
-      // Option A: Move cards to target page
+      // Migrate cards to target page
+      const cardsInLane = await db.entries.where('pageId').equals(deletingPageId).toArray();
       for (const card of cardsInLane) {
         if (card.id) {
           await db.entries.update(card.id, { pageId: moveToPageId });
-          // Our sync hooks propagate the updates to firestore automatically during scheduleSync or via livequeries
         }
       }
     }
 
-    // 3. Delete the page itself from DB & cloud
+    // 2. Delete the page itself from db.pages
     await db.pages.delete(deletingPageId);
     if (currentUser?.uid) {
       await deleteFromFirestore(currentUser.uid, 'pages', deletingPageId);
     }
 
-    // Identify remaining pages to sync selection state
-    const remainingPages = pages.filter(p => p.id !== deletingPageId);
+    // 3. Call scheduleSync()
+    scheduleSync();
+
+    // 4. If selectedPageId was the deleted page, set selectedPageId to the first remaining page
     if (selectedPageId === deletingPageId) {
+      const remainingPages = pages.filter(p => p.id !== deletingPageId);
       if (remainingPages.length > 0) {
         setSelectedPageId(remainingPages[0].id!);
       } else {
@@ -582,9 +610,9 @@ export default function App() {
       }
     }
 
+    // 5. Close the sheet by setting deletingPageId to null
     setDeletingPageId(null);
     setMoveToPageId(null);
-    scheduleSync();
   };
 
   const handleCreateBlankTaskInstant = async () => {
@@ -625,41 +653,38 @@ export default function App() {
     scheduleSync();
   };
 
-  const handleDeleteSpace = async (spaceId: number, name: string) => {
-    if (confirm(`Delete key space "${name}"? This removes all internal pages and task records permanently.`)) {
-      const spacePages = await db.pages.where('spaceId').equals(spaceId).toArray();
-      const spaceTasks = await db.entries.where('spaceId').equals(spaceId).toArray();
+  const handleDeleteSpace = (spaceId: number, name: string) => {
+    setPendingDeleteSpaceId(spaceId);
+    setPendingDeleteSpaceName(name);
+  };
 
-      await db.transaction('rw', [db.spaces, db.pages, db.entries], async () => {
-        await db.entries.where('spaceId').equals(spaceId).delete();
-        await db.pages.where('spaceId').equals(spaceId).delete();
-        await db.spaces.delete(spaceId);
-      });
+  const handleConfirmDeleteSpace = async () => {
+    if (pendingDeleteSpaceId === null) return;
+    const spaceId = pendingDeleteSpaceId;
 
-      if (currentUser?.uid) {
-        for (const t of spaceTasks) {
-          if (t.id) {
-            await deleteFromFirestore(currentUser.uid, 'entries', t.id);
-          }
-        }
-        for (const p of spacePages) {
-          if (p.id) {
-            await deleteFromFirestore(currentUser.uid, 'pages', p.id);
-          }
-        }
-        await deleteFromFirestore(currentUser.uid, 'spaces', spaceId);
-      }
+    // Explicitly delete all pages and entries (tasks) belonging to that space
+    await db.transaction('rw', [db.spaces, db.pages, db.entries], async () => {
+      await db.entries.where('spaceId').equals(spaceId).delete();
+      await db.pages.where('spaceId').equals(spaceId).delete();
+      await db.spaces.delete(spaceId);
+    });
 
-      const remainingSpaces = await db.spaces.toArray();
-      if (remainingSpaces.length === 0) {
-        setSelectedSpaceId(null);
-        setLaunchScreenActive(true);
-      } else {
-        setSelectedSpaceId(remainingSpaces[0]?.id || null);
-      }
-      setShowSpacePickerSheet(false);
-      scheduleSync();
+    // Fire direct Firestore cascading deletes for all affected records in a batch write
+    if (currentUser?.uid) {
+      await deleteSpaceCascadingFromFirestore(currentUser.uid, spaceId);
     }
+
+    const remainingSpaces = await db.spaces.toArray();
+    if (remainingSpaces.length === 0) {
+      setSelectedSpaceId(null);
+      setLaunchScreenActive(true);
+    } else {
+      setSelectedSpaceId(remainingSpaces[0]?.id || null);
+    }
+    setPendingDeleteSpaceId(null);
+    setPendingDeleteSpaceName('');
+    setShowSpacePickerSheet(false);
+    scheduleSync();
   };
 
   const handleToggleSpacePin = async (spaceId: number) => {
@@ -669,6 +694,21 @@ export default function App() {
       await db.spaces.update(spaceId, { pinned: !isPinned, updatedAt: Date.now() });
       scheduleSync();
     }
+  };
+
+  const handleRenameSpace = async (spaceId: number, newName: string) => {
+    await db.spaces.update(spaceId, { name: newName, updatedAt: Date.now() });
+    scheduleSync();
+  };
+
+  const handleInitiateRenamePage = (pageId: number, pageName: string) => {
+    setRenamingPageId(pageId);
+    setRenamePageInput(pageName);
+  };
+
+  const handleRenamePage = async (pageId: number, newName: string) => {
+    await db.pages.update(pageId, { name: newName, updatedAt: Date.now() });
+    scheduleSync();
   };
 
   const handleMoveTaskStage = async (task: Task, direction: 'left' | 'right') => {
@@ -707,19 +747,50 @@ export default function App() {
     }
   };
 
-  // Safe search match
+  // Safe search match with case-insensitivity and Rich-Text plain-text JSON stripping
   const matchesSearch = (task: Task) => {
     if (!searchQuery.trim()) return true;
     const query = searchQuery.toLowerCase();
+
+    // Helper to extract nested plain text from Tiptap JSON structure
+    const extractPlainText = (notesStr?: string): string => {
+      if (!notesStr) return '';
+      const trimmed = notesStr.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          const obj = JSON.parse(trimmed);
+          const extract = (node: any): string => {
+            if (!node) return '';
+            if (typeof node === 'string') return node;
+            if (node.text) return node.text;
+            if (Array.isArray(node)) {
+              return node.map(extract).join(' ');
+            }
+            if (typeof node === 'object') {
+              return Object.values(node).map(extract).join(' ');
+            }
+            return '';
+          };
+          return extract(obj);
+        } catch {
+          // fallback
+        }
+      }
+      return trimmed.replace(/<[^>]*>/g, ' ');
+    };
+
+    const notesPlain = extractPlainText(task.notes);
+
     return (task.title || '').toLowerCase().includes(query) || 
-           (task.description || '').toLowerCase().includes(query);
+           (task.description || '').toLowerCase().includes(query) ||
+           notesPlain.toLowerCase().includes(query);
   };
 
   // Filter tasks reactively based on currently active spaceId and page tab's pageId
   const activePageTasks = tasks.filter(t => t.spaceId === currentSpace?.id && t.pageId === selectedPageId && matchesSearch(t));
 
   return (
-    <motion.div layout layoutRoot className="flex flex-col h-screen w-screen bg-zinc-50 select-none overflow-hidden" id="app-viewport">
+    <motion.div layout layoutRoot className="flex flex-col h-screen w-screen bg-zinc-50 select-none overflow-hidden keyboard-aware" id="app-viewport">
       
       {launchScreenActive ? (
         <SpaceLaunchScreen
@@ -735,12 +806,13 @@ export default function App() {
           onSignOut={signOut}
           onCreateSpaceClick={() => setShowNewSpaceSheet(true)}
           onDeleteSpace={handleDeleteSpace}
+          onRenameSpace={handleRenameSpace}
         />
       ) : (
         <>
           {/* 1. Header Navigation Bar (Locked Height: 14 / h-[56px] + Safe notch top) */}
           <header 
-        className="shrink-0 bg-white border-b border-zinc-200/85 z-30" 
+        className="shrink-0 bg-surface border-b border-border/85 z-30" 
         style={{ paddingTop: 'var(--safe-top)' }} 
         id="app-header-bar"
       >
@@ -749,18 +821,18 @@ export default function App() {
           {/* Back to Launcher Trigger */}
           <button 
             onClick={() => setLaunchScreenActive(true)}
-            className="flex items-center gap-2.5 max-w-[65%] text-left p-1.5 px-2.5 bg-zinc-50 border border-zinc-200/60 rounded-xl active-bounce hover:bg-zinc-100/95 duration-100 cursor-pointer min-h-[44px]"
+            className="flex items-center gap-2.5 max-w-[65%] text-left p-1.5 px-2.5 bg-surface border border-border/60 rounded-xl active-bounce hover:bg-background/95 duration-100 cursor-pointer min-h-[44px]"
             id="trigger-back-to-launcher"
           >
-            <ArrowLeft className="w-4 h-4 text-zinc-500 shrink-0 mb-0.5" />
+            <ArrowLeft className="w-4 h-4 text-text-secondary shrink-0 mb-0.5" />
             <div className="truncate">
-              <div className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest leading-none">Launcher</div>
+              <div className="text-[9px] text-zinc-405 font-bold uppercase tracking-widest leading-none">Launcher</div>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <div 
                   className="w-2 h-2 rounded-full shrink-0" 
                   style={{ backgroundColor: currentSpace?.color || '#6366f1' }} 
                 />
-                <span className="text-xs font-extrabold text-zinc-800 truncate">{currentSpace?.name || 'Personal'}</span>
+                <span className="text-xs font-extrabold text-text-primary truncate">{currentSpace?.name || 'Personal'}</span>
               </div>
             </div>
           </button>
@@ -774,7 +846,7 @@ export default function App() {
                 placeholder="Search..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full h-9 pl-8 pr-2.5 rounded-xl bg-zinc-50 border border-zinc-200 focus:outline-hidden focus:border-indigo-500 focus:bg-white text-xs text-zinc-800 placeholder-zinc-400"
+                className="w-full h-9 pl-8 pr-2.5 rounded-xl bg-surface border border-border focus:outline-hidden focus:border-indigo-500 focus:bg-surface text-xs text-text-primary placeholder-zinc-400"
                 id="search-input"
               />
               {searchQuery && (
@@ -809,7 +881,7 @@ export default function App() {
             {/* Top Swapping Tab lane header (Height: 48px) */}
             <div 
               ref={pillsContainerRef}
-              className={`bg-white border-b border-zinc-200 shrink-0 px-4 py-2 flex items-center gap-2 no-scrollbar scroll-smooth ${isDraggingElement ? 'overflow-hidden pointer-events-none' : 'overflow-x-auto'}`}
+              className={`bg-surface border-b border-border shrink-0 px-4 py-2 flex items-center gap-2 no-scrollbar scroll-smooth ${isDraggingElement ? 'overflow-hidden pointer-events-none' : 'overflow-x-auto'}`}
               id="lanes-tab-container"
               style={{ overscrollBehaviorX: 'contain' }}
             >
@@ -832,13 +904,14 @@ export default function App() {
                     renderPageIcon={renderPageIcon}
                     onDragStateChange={setIsDraggingElement}
                     onDelete={handleInitiateDeletePage}
+                    onLongPress={handleInitiateRenamePage}
                   />
                 );
               })}
 
               <button
                 onClick={() => setShowNewPageSheet(true)}
-                className="flex items-center justify-center p-2 rounded-full bg-zinc-50 border border-dashed border-zinc-300 text-zinc-400 hover:text-indigo-600 hover:border-indigo-400 transition-colors cursor-pointer min-w-[36px] min-h-[36px]"
+                className="flex items-center justify-center p-2 rounded-full bg-surface border border-dashed border-border text-text-secondary hover:text-indigo-600 hover:border-indigo-400 transition-colors cursor-pointer min-w-[36px] min-h-[36px]"
                 title="Add Stage / Column"
                 id="btn-add-lane"
               >
@@ -849,7 +922,7 @@ export default function App() {
             {/* Horizontal Swipable Track Container */}
             <div 
               ref={containerRef}
-              className="flex-1 overflow-hidden relative w-full h-full bg-zinc-50"
+              className="flex-1 overflow-hidden relative w-full h-full bg-background"
               id="horizontal-swipable-track-container"
               {...bindSwipe()}
               style={{ touchAction: 'pan-y', overscrollBehaviorX: 'contain' }}
@@ -957,10 +1030,10 @@ export default function App() {
 
                       {pageTasks.length === 0 && (
                         <div className="py-10 px-4 text-center mt-auto" id={`empty-tasks-fallback-${page.id}`}>
-                          <div className="w-16 h-16 rounded-full bg-zinc-100 flex items-center justify-center mx-auto mb-4 text-zinc-400 border border-zinc-200">
+                          <div className="w-16 h-16 rounded-full bg-background flex items-center justify-center mx-auto mb-4 text-text-secondary border border-border">
                             <Inbox className="w-6 h-6 text-zinc-300" />
                           </div>
-                          <h3 className="font-bold text-zinc-700 text-sm leading-tight">Quiet Board Stage</h3>
+                          <h3 className="font-bold text-text-primary text-sm leading-tight">Quiet Board Stage</h3>
                           <p className="text-xs text-zinc-400 mt-1.5 max-w-xs mx-auto">
                             No items in this lane. Touch the floating action indicator below to secure tasks.
                           </p>
@@ -1009,19 +1082,19 @@ export default function App() {
               : 'none',
             willChange: 'transform, left, top',
           }}
-          className="bg-white rounded-2xl border border-indigo-500 shadow-2xl p-4 flex flex-col select-none border-t-4 border-t-indigo-600 font-sans"
+          className="bg-surface rounded-2xl border border-indigo-500 shadow-2xl p-4 flex flex-col select-none border-t-4 border-t-indigo-600 font-sans"
         >
-          <div className="flex items-start justify-between gap-3 mb-1.5">
-            <h4 className="font-bold text-zinc-800 tracking-tight text-sm leading-snug break-words">
+          <div className="flex items-start justify-between gap-3 mb-1.5 font-sans">
+            <h4 className="font-bold text-text-primary tracking-tight text-sm leading-snug break-words">
               {draggedCardInfo.title}
             </h4>
           </div>
           {draggedCardInfo.description && (
-            <p className="text-zinc-500 text-xs leading-relaxed mb-4 break-words line-clamp-2">
+            <p className="text-text-secondary text-xs leading-relaxed mb-4 break-words line-clamp-2">
               {draggedCardInfo.description}
             </p>
           )}
-          <div className="flex items-center justify-between pt-3 border-t border-zinc-100 mt-auto">
+          <div className="flex items-center justify-between pt-3 border-t border-border mt-auto">
             <span className={`px-2 py-0.5 rounded-lg text-[9px] font-bold uppercase tracking-wider border ${getPriorityClasses(draggedCardInfo.priority)}`}>
               {draggedCardInfo.priority || 'None'}
             </span>
@@ -1041,12 +1114,12 @@ export default function App() {
       {/* OVERLAY SHEET A: SPACE PICKER BOTTOM LIST */}
       {showSpacePickerSheet && (
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-end justify-center z-50 p-0 animate-fade-in" id="space-picker-backdrop">
-          <div className="w-full bg-white rounded-t-3xl border-t border-zinc-200 shadow-2xl flex flex-col max-h-[75vh]" id="space-picker-sheet">
+          <div className="w-full bg-surface rounded-t-3xl border-t border-border shadow-2xl flex flex-col max-h-[75vh]" id="space-picker-sheet">
             
             {/* Grab drag handle */}
-            <div className="flex flex-col items-center py-3 border-b border-zinc-100" id="space-sheet-handle">
-              <div className="w-12 h-1 rounded-full bg-zinc-200" />
-              <h3 className="font-extrabold text-sm text-zinc-800 mt-2.5">Switch Project Space</h3>
+            <div className="flex flex-col items-center py-3 border-b border-border" id="space-sheet-handle">
+              <div className="w-12 h-1 rounded-full bg-border" />
+              <h3 className="font-extrabold text-sm text-text-primary mt-2.5">Switch Project Space</h3>
             </div>
 
             {/* List */}
@@ -1061,13 +1134,13 @@ export default function App() {
                       setShowSpacePickerSheet(false);
                     }}
                     className={`w-full flex items-center justify-between p-3 rounded-2xl active-bounce cursor-pointer ${
-                      isActive ? 'bg-zinc-100 font-bold' : 'hover:bg-zinc-50'
+                      isActive ? 'bg-background font-bold text-text-primary' : 'hover:bg-background/50 text-text-secondary'
                     }`}
                     id={`picker-space-${sp.id}`}
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-3.5 h-3.5 rounded-full" style={{ backgroundColor: sp.color }} />
-                      <span className="text-zinc-800 text-sm">{sp.name}</span>
+                      <span className="text-text-primary text-sm">{sp.name}</span>
                     </div>
                     {isActive && <div className="w-2.5 h-2.5 rounded-full bg-indigo-600 shrink-0" />}
                   </button>
@@ -1078,7 +1151,7 @@ export default function App() {
                 onClick={() => {
                   setShowNewSpaceSheet(true);
                 }}
-                className="w-full flex items-center gap-3 p-3.5 rounded-2xl text-indigo-600 bg-indigo-50/50 hover:bg-indigo-50 active-bounce cursor-pointer font-bold text-sm mt-4 min-h-[44px]"
+                className="w-full flex items-center gap-3 p-3.5 rounded-2xl text-indigo-650 bg-indigo-50/50 hover:bg-indigo-50 active-bounce cursor-pointer font-bold text-sm mt-4 min-h-[44px]"
                 id="picker-btn-add-space"
               >
                 <PlusCircle className="w-4 h-4" />
@@ -1086,10 +1159,10 @@ export default function App() {
               </button>
             </div>
 
-            <div className="p-4 border-t border-zinc-100 shrink-0" id="space-sheet-footer">
+            <div className="p-4 border-t border-border shrink-0" id="space-sheet-footer">
               <button
                 onClick={() => setShowSpacePickerSheet(false)}
-                className="w-full bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-bold text-sm py-3 rounded-2xl active-bounce cursor-pointer min-h-[44px]"
+                className="w-full bg-background hover:bg-background/80 text-text-primary font-bold text-sm py-3 rounded-2xl active-bounce cursor-pointer min-h-[44px]"
                 id="btn-close-space-picker"
               >
                 Close View
@@ -1104,19 +1177,37 @@ export default function App() {
       {/* OVERLAY SHEET B: CREATE NEW SPACE FORM */}
       {showNewSpaceSheet && (
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-end justify-center z-50 p-0 animate-fade-in" id="new-space-backdrop">
-          <div className="w-full bg-white rounded-t-3xl border-t border-zinc-200 shadow-2xl flex flex-col max-h-[85vh]" id="new-space-sheet">
+          <div className="w-full bg-surface rounded-t-3xl border-t border-border shadow-2xl flex flex-col max-h-[85vh]" id="new-space-sheet" style={{ paddingBottom: 'env(keyboard-inset-height, 0px)' }}>
             
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100" id="new-space-header">
-              <h3 className="font-extrabold text-sm text-zinc-800">Launch Workspace Space</h3>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border" id="new-space-header">
+              <h3 className="font-extrabold text-sm text-text-primary">Launch Workspace Space</h3>
               <button 
                 onClick={() => setShowNewSpaceSheet(false)}
-                className="p-2 text-zinc-400 hover:text-zinc-600 rounded-lg"
+                className="p-2 text-zinc-400 hover:text-zinc-650 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleCreateSpace} className="flex-1 overflow-y-auto p-6 space-y-5" id="new-space-form">
+              <div className="flex gap-3 pb-4 border-b border-border" id="sheet-space-actions">
+                <button
+                  type="button"
+                  onClick={() => setShowNewSpaceSheet(false)}
+                  className="flex-1 bg-background text-text-primary font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
+                  id="btn-sheet-space-cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-3 rounded-xl shadow-md active-bounce cursor-pointer min-h-[44px]"
+                  id="btn-sheet-space-submit"
+                >
+                  Create Space
+                </button>
+              </div>
+
               <div>
                 <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Space Title</label>
                 <input 
@@ -1124,7 +1215,7 @@ export default function App() {
                   placeholder="e.g., Household Errands, Client Work..."
                   value={newSpaceName}
                   onChange={(e) => setNewSpaceName(e.target.value)}
-                  className="w-full h-11 px-3.5 rounded-xl bg-zinc-50 border border-zinc-200 focus:outline-hidden focus:border-indigo-500 focus:bg-white text-sm text-zinc-900"
+                  className="w-full h-11 px-3.5 rounded-xl bg-surface border border-border focus:outline-hidden focus:border-indigo-500 focus:bg-surface text-sm text-text-primary"
                   required
                   autoFocus
                   id="input-sheet-space-name"
@@ -1140,7 +1231,7 @@ export default function App() {
                       type="button"
                       onClick={() => setNewSpaceColor(color)}
                       className={`h-11 rounded-xl border-2 transition-transform cursor-pointer flex items-center justify-center ${
-                        newSpaceColor === color ? 'border-zinc-900 scale-102 font-bold' : 'border-transparent'
+                        newSpaceColor === color ? 'border-zinc-940 scale-102 font-bold' : 'border-transparent'
                       }`}
                       style={{ backgroundColor: color }}
                       id={`choice-color-${color.replace('#', '')}`}
@@ -1166,12 +1257,12 @@ export default function App() {
                           setNewSpaceColor(palette['--color-accent']);
                         }}
                         className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between text-left ${
-                          isSelected ? 'border-zinc-900 bg-zinc-100/50 shadow-xs' : 'border-zinc-200 hover:border-zinc-300 bg-white'
+                          isSelected ? 'border-indigo-500 bg-background shadow-xs' : 'border-border hover:border-zinc-305 bg-surface'
                         }`}
                         id={`choice-theme-${theme.id}`}
                       >
-                        <span className="text-xs font-extrabold text-zinc-800 truncate mr-2">{theme.name}</span>
-                        <div className="flex shrink-0 border border-zinc-200/50 rounded-md overflow-hidden h-4 w-9">
+                        <span className="text-xs font-extrabold text-text-primary truncate mr-2">{theme.name}</span>
+                        <div className="flex shrink-0 border border-border/50 rounded-md overflow-hidden h-4 w-9">
                           <div 
                             className="w-1/2 h-full" 
                             style={{ backgroundColor: palette['--color-accent'] }} 
@@ -1186,24 +1277,6 @@ export default function App() {
                   })}
                 </div>
               </div>
-
-              <div className="pt-6 border-t border-zinc-100 flex gap-3" id="sheet-space-actions">
-                <button
-                  type="button"
-                  onClick={() => setShowNewSpaceSheet(false)}
-                  className="flex-1 bg-zinc-100 text-zinc-700 font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
-                  id="btn-sheet-space-cancel"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-3 rounded-xl shadow-md active-bounce cursor-pointer min-h-[44px]"
-                  id="btn-sheet-space-submit"
-                >
-                  Create Space
-                </button>
-              </div>
             </form>
 
           </div>
@@ -1214,38 +1287,24 @@ export default function App() {
       {/* OVERLAY SHEET C: CREATE ACTIVE LANE LANE / PAGE */}
       {showNewPageSheet && (
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-end justify-center z-50 p-0 animate-fade-in" id="new-page-backdrop">
-          <div className="w-full bg-white rounded-t-3xl border-t border-zinc-200 shadow-2xl flex flex-col max-h-[80vh]" id="new-page-sheet">
+          <div className="w-full bg-surface rounded-t-3xl border-t border-border shadow-2xl flex flex-col max-h-[80vh]" id="new-page-sheet" style={{ paddingBottom: 'env(keyboard-inset-height, 0px)' }}>
             
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100" id="new-page-header">
-              <h3 className="font-extrabold text-sm text-zinc-800">Add Board Stage Lane</h3>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border" id="new-page-header">
+              <h3 className="font-extrabold text-sm text-text-primary">Add Board Stage Lane</h3>
               <button 
                 onClick={() => setShowNewPageSheet(false)}
-                className="p-2 text-zinc-400 hover:text-zinc-600 rounded-lg"
+                className="p-2 text-zinc-400 hover:text-zinc-650 rounded-lg cursor-pointer animate-duration-100"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleCreatePage} className="p-6 space-y-5" id="new-page-form">
-              <div>
-                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Stage Title Name</label>
-                <input 
-                  type="text"
-                  placeholder="e.g., Icebox, Testing, Blocked..."
-                  value={newPageName}
-                  onChange={(e) => setNewPageName(e.target.value)}
-                  className="w-full h-11 px-3.5 rounded-xl bg-zinc-50 border border-zinc-200 focus:outline-hidden focus:border-indigo-500 focus:bg-white text-sm text-zinc-900"
-                  required
-                  autoFocus
-                  id="input-sheet-page-name"
-                />
-              </div>
-
-              <div className="pt-6 border-t border-zinc-100 flex gap-3" id="sheet-page-actions">
+              <div className="flex gap-3 pb-4 border-b border-border" id="sheet-page-actions">
                 <button
                   type="button"
                   onClick={() => setShowNewPageSheet(false)}
-                  className="flex-1 bg-zinc-100 text-zinc-700 font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
+                  className="flex-1 bg-background text-text-primary font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
                   id="btn-sheet-page-cancel"
                 >
                   Cancel
@@ -1257,6 +1316,20 @@ export default function App() {
                 >
                   Launch Stage
                 </button>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Stage Title Name</label>
+                <input 
+                  type="text"
+                  placeholder="e.g., Icebox, Testing, Blocked..."
+                  value={newPageName}
+                  onChange={(e) => setNewPageName(e.target.value)}
+                  className="w-full h-11 px-3.5 rounded-xl bg-surface border border-border focus:outline-hidden focus:border-indigo-500 focus:bg-surface text-sm text-text-primary"
+                  required
+                  autoFocus
+                  id="input-sheet-page-name"
+                />
               </div>
             </form>
 
@@ -1278,11 +1351,11 @@ export default function App() {
         <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-center justify-center z-50 p-4" id="delete-lane-backdrop">
           <div className="absolute inset-0" onClick={() => setDeletingPageId(null)} />
           
-          <div className="w-full max-w-md bg-white rounded-3xl border border-zinc-200 shadow-2xl flex flex-col relative z-10 overflow-hidden" id="delete-lane-sheet">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 bg-rose-50/10" id="delete-lane-header">
+          <div className="w-full max-w-md bg-surface rounded-3xl border border-border shadow-2xl flex flex-col relative z-10 overflow-hidden" id="delete-lane-sheet">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-rose-50/10" id="delete-lane-header">
               <div className="flex items-center gap-2 text-rose-600">
                 <AlertTriangle className="w-4.5 h-4.5" />
-                <h3 className="font-extrabold text-sm">Delete Board Stage Lane</h3>
+                <h3 className="font-extrabold text-sm text-text-primary">Delete Board Stage Lane</h3>
               </div>
               <button 
                 onClick={() => setDeletingPageId(null)}
@@ -1295,23 +1368,23 @@ export default function App() {
             <div className="p-6 space-y-5">
               <div className="space-y-1">
                 <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest leading-none">TARGET LANE</span>
-                <h4 className="text-lg font-black text-zinc-800 leading-snug">"{pages.find(p => p.id === deletingPageId)?.name}"</h4>
+                <h4 className="text-lg font-black text-text-primary leading-snug">"{pages.find(p => p.id === deletingPageId)?.name}"</h4>
               </div>
 
               {tasks.filter(t => t.spaceId === currentSpace?.id && t.pageId === deletingPageId).length > 0 ? (
                 <>
                   <p className="text-xs text-zinc-500 leading-relaxed">
-                    This lane currently holds <strong className="text-zinc-800 font-extrabold">{tasks.filter(t => t.spaceId === currentSpace?.id && t.pageId === deletingPageId).length} cards</strong>. Choose how to handle these active records:
+                    This lane currently holds <strong className="text-text-primary font-extrabold">{tasks.filter(t => t.spaceId === currentSpace?.id && t.pageId === deletingPageId).length} cards</strong>. Choose how to handle these active records:
                   </p>
 
                   {/* Option 1: Move Logic */}
-                  <div className="p-4 bg-zinc-50 border border-zinc-200/60 rounded-2xl space-y-3" id="delete-lane-move-option">
+                  <div className="p-4 bg-background border border-border/60 rounded-2xl space-y-3" id="delete-lane-move-option">
                     <div className="flex items-start gap-3">
                       <div className="w-5 h-5 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0 mt-0.5">
                         <span className="text-[10px] font-black">1</span>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <h5 className="font-bold text-zinc-805 text-xs">Migrate Cards to Alternative Lane</h5>
+                        <h5 className="font-bold text-text-primary text-xs">Migrate Cards to Alternative Lane</h5>
                         <p className="text-[11px] text-zinc-450 mt-0.5">Move all cards into another page column before deleting this column.</p>
                       </div>
                     </div>
@@ -1321,7 +1394,7 @@ export default function App() {
                         <select
                           value={moveToPageId || ''}
                           onChange={(e) => setMoveToPageId(Number(e.target.value))}
-                          className="w-full h-11 pl-3.5 pr-8 rounded-xl bg-white border border-zinc-200 text-xs font-bold text-zinc-805 focus:outline-hidden focus:border-indigo-500 appearance-none shadow-2xs"
+                          className="w-full h-11 pl-3.5 pr-8 rounded-xl bg-surface border border-border text-xs font-bold text-text-primary focus:outline-hidden focus:border-indigo-500 appearance-none shadow-2xs"
                           id="delete-lane-select"
                         >
                           {pages.filter(p => p.id !== deletingPageId).map((p) => (
@@ -1358,11 +1431,7 @@ export default function App() {
                     </div>
 
                     <button
-                      onClick={() => {
-                        if (confirm("Are you absolutely sure you want to permanently delete all card records in this lane? This action cannot be undone.")) {
-                          handleConfirmDeletePage(true);
-                        }
-                      }}
+                      onClick={() => handleConfirmDeletePage(true)}
                       className="w-full h-11 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs transition-colors active-bounce cursor-pointer flex items-center justify-center gap-1"
                       id="delete-lane-btn-purge"
                     >
@@ -1380,7 +1449,7 @@ export default function App() {
                   <div className="flex gap-3 pt-4" id="delete-lane-empty-actions">
                     <button
                       onClick={() => setDeletingPageId(null)}
-                      className="flex-1 bg-zinc-100 hover:bg-zinc-150 text-zinc-700 font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
+                      className="flex-1 bg-background hover:bg-background/80 text-text-primary font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
                       id="delete-lane-empty-cancel"
                     >
                       Cancel
@@ -1396,6 +1465,121 @@ export default function App() {
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* OVERLAY SHEET F / SPACE DELETION CONFIRMATION WINDOW */}
+      {pendingDeleteSpaceId !== null && (
+        <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-end justify-center z-50 p-0 animate-fade-in" id="delete-space-backdrop">
+          <div className="absolute inset-0" onClick={() => setPendingDeleteSpaceId(null)} />
+          
+          <div className="w-full bg-surface rounded-t-3xl border-t border-border shadow-2xl flex flex-col relative z-50 max-h-[85vh]" id="delete-space-sheet">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-rose-50/10" id="delete-space-header">
+              <div className="flex items-center gap-2 text-rose-600">
+                <AlertTriangle className="w-4.5 h-4.5" />
+                <h3 className="font-extrabold text-sm text-text-primary">Delete Workspace Space</h3>
+              </div>
+              <button 
+                onClick={() => setPendingDeleteSpaceId(null)}
+                className="p-2 text-zinc-400 hover:text-zinc-650 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 bg-surface">
+              <div className="space-y-1">
+                <span className="text-[10px] text-zinc-405 font-bold uppercase tracking-widest leading-none">TARGET SPACE</span>
+                <h4 className="text-lg font-black text-text-primary leading-snug">"{pendingDeleteSpaceName}"</h4>
+              </div>
+
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Are you absolutely sure you want to delete this workspace? All pages, board lanes, and card records inside <strong className="text-text-primary font-extrabold">{pendingDeleteSpaceName}</strong> will be permanently deleted across all devices. This action cannot be undone.
+              </p>
+
+              <div className="flex gap-3 pt-4 border-t border-border" id="delete-space-actions">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteSpaceId(null)}
+                  className="flex-1 bg-background hover:bg-background/85 text-text-primary font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
+                  id="delete-space-cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteSpace}
+                  className="flex-1 text-white bg-rose-600 hover:bg-rose-700 font-bold text-xs py-3 rounded-xl shadow-md active-bounce cursor-pointer min-h-[44px] flex items-center justify-center gap-1.5"
+                  id="delete-space-confirm"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete Space</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OVERLAY SHEET G / RENAME LANE / PAGE WINDOW */}
+      {renamingPageId !== null && (
+        <div className="fixed inset-0 bg-zinc-950/40 backdrop-blur-xs flex items-end justify-center z-50 p-0 animate-fade-in" id="rename-lane-backdrop">
+          <div className="absolute inset-0" onClick={() => setRenamingPageId(null)} />
+          
+          <div className="w-full bg-surface rounded-t-3xl border-t border-border shadow-2xl flex flex-col relative z-50 max-h-[85vh]" id="rename-lane-sheet" style={{ paddingBottom: 'env(keyboard-inset-height, 0px)' }}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border" id="rename-lane-header">
+              <h3 className="font-extrabold text-sm text-text-primary">Rename Board Stage Lane</h3>
+              <button 
+                onClick={() => setRenamingPageId(null)}
+                className="p-2 text-zinc-400 hover:text-zinc-650 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (renamePageInput.trim()) {
+                  handleRenamePage(renamingPageId, renamePageInput.trim());
+                  setRenamingPageId(null);
+                }
+              }}
+              className="p-6 space-y-5 bg-surface"
+              id="rename-lane-form"
+            >
+              <div className="flex gap-3 pb-4 border-b border-border" id="sheet-rename-lane-actions">
+                <button
+                  type="button"
+                  onClick={() => setRenamingPageId(null)}
+                  className="flex-1 bg-background hover:bg-background/85 text-text-primary font-bold text-xs py-3 rounded-xl active-bounce cursor-pointer min-h-[44px]"
+                  id="btn-sheet-rename-lane-cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-3 rounded-xl shadow-md active-bounce cursor-pointer min-h-[44px]"
+                  id="btn-sheet-rename-lane-submit"
+                >
+                  Confirm Rename
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Stage Title Name</label>
+                <input 
+                  type="text"
+                  ref={(input) => input && input.focus()}
+                  placeholder="e.g., Icebox, Testing, Blocked..."
+                  value={renamePageInput}
+                  onChange={(e) => setRenamePageInput(e.target.value)}
+                  className="w-full h-11 px-3.5 rounded-xl bg-surface border border-border focus:outline-hidden focus:border-indigo-500 focus:bg-surface text-sm text-text-primary"
+                  id="input-sheet-rename-lane-name"
+                />
+              </div>
+            </form>
           </div>
         </div>
       )}

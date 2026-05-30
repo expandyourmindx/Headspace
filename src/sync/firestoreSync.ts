@@ -1,4 +1,4 @@
-import { collection, doc, writeBatch, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, doc, writeBatch, getDocs, deleteDoc, query, where } from 'firebase/firestore';
 import { db_firestore, isFirebaseConfigured, auth as firebaseAuth } from '../firebase';
 import { db } from '../db';
 
@@ -227,5 +227,48 @@ export async function deleteFromFirestore(
     console.log(`Successfully deleted document ${collectionName}/${docId} from Firestore.`);
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `${path}/${docId}`);
+  }
+}
+
+/**
+ * Direct cascading space deletion from Firestore. Finds all entries and pages 
+ * belonging to spaceId and triggers a batch write deletion in Firestore.
+ */
+export async function deleteSpaceCascadingFromFirestore(
+  uid: string,
+  spaceId: number
+): Promise<void> {
+  if (!isFirebaseConfigured || !db_firestore) {
+    return;
+  }
+
+  try {
+    const batch = writeBatch(db_firestore);
+
+    // Query and queue deletion for entries
+    const entriesPath = `users/${uid}/entries`;
+    const entriesQuery = query(collection(db_firestore, entriesPath), where('spaceId', '==', spaceId));
+    const entriesSnapshot = await getDocs(entriesQuery);
+    entriesSnapshot.docs.forEach(d => {
+      batch.delete(d.ref);
+    });
+
+    // Query and queue deletion for pages
+    const pagesPath = `users/${uid}/pages`;
+    const pagesQuery = query(collection(db_firestore, pagesPath), where('spaceId', '==', spaceId));
+    const pagesSnapshot = await getDocs(pagesQuery);
+    pagesSnapshot.docs.forEach(d => {
+      batch.delete(d.ref);
+    });
+
+    // Queue deletion for the space target itself
+    const spaceDocRef = doc(db_firestore, `users/${uid}/spaces`, spaceId.toString());
+    batch.delete(spaceDocRef);
+
+    // Commit the entire cascading batch write
+    await batch.commit();
+    console.log(`Successfully completed cascading space deletion for spaceId ${spaceId} from Firestore.`);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `users/${uid}/spaces/${spaceId} (cascading)`);
   }
 }

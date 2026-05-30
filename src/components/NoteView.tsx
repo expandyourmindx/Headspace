@@ -55,7 +55,7 @@ export default function NoteView({
     })(),
     editorProps: {
       attributes: {
-        class: 'focus:outline-none min-h-[300px] max-w-none text-zinc-800 leading-relaxed px-6 py-4 pb-20 prose prose-sm focus:ring-0',
+        class: 'focus:outline-none min-h-[300px] max-w-none text-text-primary leading-relaxed px-6 py-4 pb-20 prose prose-sm focus:ring-0',
         style: 'outline: none; -webkit-user-select: text; user-select: text;',
       },
       handleDOMEvents: {
@@ -155,13 +155,14 @@ export default function NoteView({
       <motion.div
         layoutId={`task-card-container-${task.id}`}
         layoutDependency={task.id}
-        className="w-full h-full md:max-w-2xl md:h-[90vh] bg-white rounded-none md:rounded-3xl border border-zinc-200 shadow-2xl relative flex flex-col overflow-hidden z-10"
+        className="w-full h-full md:max-w-2xl md:h-[90vh] bg-surface rounded-none md:rounded-3xl border border-border shadow-2xl relative flex flex-col overflow-hidden z-10"
         id={`note-view-panel-${task.id}`}
       >
         <style>{`
           /* Custom stylish TipTap styling */
           .ProseMirror {
             outline: none !important;
+            color: var(--color-text-primary);
           }
           .ProseMirror p {
             margin-bottom: 0.75rem;
@@ -169,14 +170,14 @@ export default function NoteView({
           .ProseMirror h1 {
             font-size: 1.5rem;
             font-weight: 800;
-            color: #18181b;
+            color: var(--color-text-primary);
             margin-top: 1.5rem;
             margin-bottom: 0.75rem;
           }
           .ProseMirror h2 {
             font-size: 1.25rem;
             font-weight: 700;
-            color: #18181b;
+            color: var(--color-text-primary);
             margin-top: 1.25rem;
             margin-bottom: 0.5rem;
           }
@@ -207,13 +208,13 @@ export default function NoteView({
           }
           .ProseMirror li[data-type="taskItem"] input[type="checkbox"] {
             appearance: none;
-            background-color: #fff;
+            background-color: var(--color-surface);
             margin: 0;
             font: inherit;
             color: currentColor;
             width: 1.15em;
             height: 1.15em;
-            border: 2px solid #d1d5db;
+            border: 2px solid var(--color-border);
             border-radius: 0.25rem;
             transform: translateY(-0.075em);
             display: grid;
@@ -243,12 +244,12 @@ export default function NoteView({
         `}</style>
 
         {/* 1. Header Area: Closed Chevron Left + Subtle Lane Name Right */}
-        <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-100 bg-white select-none shrink-0" id="note-header-bar">
+        <header className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface select-none shrink-0" id="note-header-bar">
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={handleClose}
-              className="flex items-center justify-center p-2 rounded-xl text-zinc-500 hover:text-zinc-850 hover:bg-zinc-100 min-w-[44px] min-h-[44px] cursor-pointer"
+              className="flex items-center justify-center p-2 rounded-xl text-text-secondary hover:text-text-primary hover:bg-background min-w-[44px] min-h-[44px] cursor-pointer"
               id="note-back-button"
             >
               <ChevronLeft className="w-6 h-6" />
@@ -274,7 +275,7 @@ export default function NoteView({
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="w-full text-2xl font-extrabold text-zinc-800 placeholder-zinc-300 border-none outline-none focus:outline-none focus:ring-0 p-0"
+            className="w-full text-2xl font-extrabold text-text-primary placeholder-zinc-300 border-none outline-none focus:outline-none focus:ring-0 bg-transparent p-0"
             placeholder="Untitled"
             id="note-title-input"
           />
@@ -282,11 +283,41 @@ export default function NoteView({
 
         {/* 3. TipTap Editor Area with Overflow scroll */}
         <div 
-          className="flex-1 overflow-y-auto select-text min-h-0 bg-white" 
+          className="flex-1 overflow-y-auto select-text min-h-0 bg-surface flex flex-col justify-between" 
           id="note-editor-canvas"
           onContextMenu={(e) => e.preventDefault()}
         >
-          <EditorContent editor={editor} />
+          <div className="flex-1">
+            <EditorContent editor={editor} />
+          </div>
+
+          {/* 4. Priority Selector Footer (Sticky at the bottom of the scroll container) */}
+          <footer className="sticky bottom-0 shrink-0 p-4 bg-background border-t border-border flex items-center justify-between select-none z-10" id="note-view-footer">
+            <div className="text-xs font-extrabold uppercase tracking-widest text-text-secondary">Priority Core</div>
+            <div className="flex gap-1.5 w-[75%] max-w-[320px]">
+              {(['high', 'medium', 'low', null] as const).map((prio) => (
+                <button
+                  key={prio ?? 'none'}
+                  type="button"
+                  onClick={() => handlePriorityChange(prio)}
+                  className={`flex-1 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center border ${
+                    priority === prio
+                      ? prio === 'high'
+                        ? 'border-rose-600 bg-rose-50/10 text-rose-705 shadow-xs'
+                        : prio === 'medium'
+                        ? 'border-amber-500 bg-amber-50/10 text-amber-705 shadow-xs'
+                        : prio === 'low'
+                        ? 'border-emerald-500 bg-emerald-50/10 text-emerald-705 shadow-xs'
+                        : 'border-border bg-surface text-text-primary'
+                      : 'border-border text-text-secondary bg-surface hover:bg-background'
+                  }`}
+                  id={`note-prio-opt-${prio ?? 'none'}`}
+                >
+                  {prio ?? 'None'}
+                </button>
+              ))}
+            </div>
+          </footer>
         </div>
 
         {/* Bubble Menu selection pops up over selection */}
@@ -296,7 +327,7 @@ export default function NoteView({
               <button
                 type="button"
                 onClick={() => editor.chain().focus().toggleBold().run()}
-                className={`p-2 rounded-xl transition-colors hover:bg-zinc-805 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
+                className={`p-2 rounded-xl transition-colors hover:bg-zinc-850 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
                   editor.isActive('bold') ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-350'
                 }`}
                 title="Bold"
@@ -307,7 +338,7 @@ export default function NoteView({
               <button
                 type="button"
                 onClick={() => editor.chain().focus().toggleItalic().run()}
-                className={`p-2 rounded-xl transition-colors hover:bg-zinc-805 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
+                className={`p-2 rounded-xl transition-colors hover:bg-zinc-850 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
                   editor.isActive('italic') ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-350'
                 }`}
                 title="Italic"
@@ -318,7 +349,7 @@ export default function NoteView({
               <button
                 type="button"
                 onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-                className={`p-2 rounded-xl transition-colors hover:bg-zinc-805 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
+                className={`p-2 rounded-xl transition-colors hover:bg-zinc-850 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
                   editor.isActive('heading', { level: 1 }) ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-350'
                 }`}
                 title="Heading 1"
@@ -329,7 +360,7 @@ export default function NoteView({
               <button
                 type="button"
                 onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-                className={`p-2 rounded-xl transition-colors hover:bg-zinc-805 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
+                className={`p-2 rounded-xl transition-colors hover:bg-zinc-850 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
                   editor.isActive('heading', { level: 2 }) ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-350'
                 }`}
                 title="Heading 2"
@@ -340,7 +371,7 @@ export default function NoteView({
               <button
                 type="button"
                 onClick={() => editor.chain().focus().toggleBulletList().run()}
-                className={`p-2 rounded-xl transition-colors hover:bg-zinc-805 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
+                className={`p-2 rounded-xl transition-colors hover:bg-zinc-850 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
                   editor.isActive('bulletList') ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-350'
                 }`}
                 title="Bullet List"
@@ -351,7 +382,7 @@ export default function NoteView({
               <button
                 type="button"
                 onClick={() => editor.chain().focus().toggleTaskList().run()}
-                className={`p-2 rounded-xl transition-colors hover:bg-zinc-805 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
+                className={`p-2 rounded-xl transition-colors hover:bg-zinc-850 cursor-pointer min-w-[36px] min-h-[36px] flex items-center justify-center ${
                   editor.isActive('taskList') ? 'text-indigo-400 bg-zinc-800' : 'text-zinc-350'
                 }`}
                 title="Task List (Checkboxes)"
@@ -362,34 +393,6 @@ export default function NoteView({
             </div>
           </BubbleMenu>
         )}
-
-        {/* 4. Fixed Priority Selector Footer */}
-        <footer className="shrink-0 p-4 bg-zinc-50 border-t border-zinc-150 flex items-center justify-between select-none" id="note-view-footer">
-          <div className="text-xs font-extrabold uppercase tracking-widest text-zinc-400">Priority Core</div>
-          <div className="flex gap-1.5 w-[75%] max-w-[320px]">
-            {(['high', 'medium', 'low', null] as const).map((prio) => (
-              <button
-                key={prio ?? 'none'}
-                type="button"
-                onClick={() => handlePriorityChange(prio)}
-                className={`flex-1 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center border ${
-                  priority === prio
-                    ? prio === 'high'
-                      ? 'border-rose-600 bg-rose-50 text-rose-700 shadow-xs'
-                      : prio === 'medium'
-                      ? 'border-amber-500 bg-amber-50 text-amber-700 shadow-xs'
-                      : prio === 'low'
-                      ? 'border-emerald-500 bg-emerald-50 text-emerald-700 shadow-xs'
-                      : 'border-zinc-500 bg-zinc-100 text-zinc-800 shadow-xs'
-                    : 'border-zinc-200 text-zinc-400 bg-white hover:bg-zinc-50'
-                }`}
-                id={`note-prio-opt-${prio ?? 'none'}`}
-              >
-                {prio ?? 'None'}
-              </button>
-            ))}
-          </div>
-        </footer>
       </motion.div>
     </div>
   );
