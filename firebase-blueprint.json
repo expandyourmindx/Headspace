@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "Space": {
+      "title": "Space",
+      "description": "A top-level container for organizing boards and stages.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number", "description": "The local unique identifier" },
+        "name": { "type": "string", "description": "Display name of the space" },
+        "icon": { "type": "string", "description": "Lucide icon name" },
+        "color": { "type": "string", "description": "Hex color code" },
+        "themeId": { "type": "string", "description": "Custom color theme ID mapping to ThemePalette" },
+        "pinned": { "type": "boolean", "description": "Whether the space is pinned to the launcher" },
+        "createdAt": { "type": "number", "description": "Unix creation timestamp" },
+        "updatedAt": { "type": "number", "description": "Unix modification timestamp" }
+      },
+      "required": ["name", "icon", "color", "createdAt", "updatedAt"]
+    },
+    "Page": {
+      "title": "Page",
+      "description": "A vertical stage / list inside a space.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number", "description": "The local unique identifier" },
+        "spaceId": { "type": "number", "description": "Identifier of the parent space" },
+        "name": { "type": "string", "description": "Display name of the page" },
+        "order": { "type": "number", "description": "Sort order within the space" },
+        "icon": { "type": "string", "description": "Lucide icon name" },
+        "createdAt": { "type": "number", "description": "Unix creation timestamp" },
+        "updatedAt": { "type": "number", "description": "Unix modification timestamp" }
+      },
+      "required": ["spaceId", "name", "order", "icon", "createdAt", "updatedAt"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "An interactive card item / task stored under db.entries.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number", "description": "The local unique identifier" },
+        "spaceId": { "type": "number", "description": "Identifier of the associated space" },
+        "pageId": { "type": "number", "description": "Identifier of the page / stage it belongs to" },
+        "title": { "type": "string", "description": "Task heading title" },
+        "description": { "type": "string", "description": "Detailed notes of the task" },
+        "status": { "type": "string", "enum": ["todo", "in-progress", "done"], "description": "Task status stage" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"], "description": "Urgency degree" },
+        "order": { "type": "number", "description": "Sort position inside the page" },
+        "dueDate": { "type": "number", "description": "Unix epoch due date" },
+        "createdAt": { "type": "number", "description": "Unix creation timestamp" },
+        "updatedAt": { "type": "number", "description": "Unix modification timestamp" }
+      },
+      "required": ["spaceId", "pageId", "title", "description", "status", "priority", "order", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{uid}/spaces/{spaceId}": {
+      "schema": "Space",
+      "description": "User space definitions synced to Firestore"
+    },
+    "users/{uid}/pages/{pageId}": {
+      "schema": "Page",
+      "description": "Space board stages synced to Firestore"
+    },
+    "users/{uid}/entries/{entryId}": {
+      "schema": "Task",
+      "description": "Task items inside pages synced to Firestore"
+    }
+  }
+}

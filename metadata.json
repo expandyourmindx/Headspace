@@ -1,0 +1,6 @@
+{
+  "name": "Personal Workspace Planner",
+  "description": "An elegant personal workspace and task dashboard managed locally with Dexie.js, organized into customizable Spaces and Pages.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,108 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Global Viewport Freeze */
+html, body, #root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden !important;
+  /* Block all touch-drag canvas rubber-banding */
+  touch-action: none; 
+  overscroll-behavior: none;
+  overscroll-behavior-x: none;
+  background-color: var(--color-background);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Safe Area Custom Offsets dynamically assigned */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Fallback defaults for custom theme variable system */
+  --color-accent: #6366f1;
+  --color-accent-light: #e0e7ff;
+  --color-accent-dark: #4338ca;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f4f4f5;
+  --color-background: #fafafa;
+  --color-text-primary: #18181b;
+  --color-text-secondary: #71717a;
+  --color-border: #e4e4e7;
+}
+
+/* Theme variable overrides of structural containers */
+#app-viewport {
+  background-color: var(--color-background) !important;
+  color: var(--color-text-primary) !important;
+}
+
+#app-header-bar {
+  background-color: var(--color-surface) !important;
+  border-bottom-color: var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+}
+
+/* Back launcher button inside header */
+#trigger-back-to-launcher {
+  background-color: var(--color-surface-raised) !important;
+  border-color: var(--color-border) !important;
+}
+
+#lanes-tab-container {
+  background-color: var(--color-surface) !important;
+  border-bottom-color: var(--color-border) !important;
+}
+
+#horizontal-swipable-track-container {
+  background-color: var(--color-background) !important;
+}
+
+[id^="horizontal-lane-page-"] {
+  background-color: var(--color-background) !important;
+  color: var(--color-text-primary) !important;
+}
+
+#app-bottom-navbar {
+  background-color: var(--color-surface) !important;
+  border-top-color: var(--color-border) !important;
+}
+
+/* Navigation items primary text dynamic mapping */
+#app-header-bar input, 
+#app-header-bar span {
+  color: var(--color-text-primary);
+}
+
+/* Custom scrollbar behaviors for fine-touch mobile tracking */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* Micro bounce for interactive items */
+.active-bounce:active {
+  transform: scale(0.96);
+  transition: transform 100ms ease;
+}
